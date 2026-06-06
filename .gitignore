@@ -1,0 +1,7 @@
+# Chặn tất cả các file rác python và dữ liệu nặng bên trong src
+__pycache__/
+*.pyc
+*.mp4
+*.pt
+data_test/
+
