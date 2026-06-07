@@ -28,6 +28,7 @@ setup(
     entry_points={
         'console_scripts': [
         'run_ui=tennis_display_ui.ui_node:main',
+        'run_web= tennis_display_ui.web_node:main',
         
         ],
     },

@@ -14,7 +14,7 @@ from flask import Flask, Response, render_template_string
 app = Flask(__name__)
 
 # ⚠️ ĐƯỜNG DẪN FILE VIDEO: Bro hãy đổi tên/đường dẫn này thành file video đã xử lý của bro nhé!
-VIDEO_PATH = '/home/honvo/ros2_new/video_output.mp4' 
+VIDEO_PATH = '/home/honvo/Desktop/NCKH/data_test/output_processed_video.mp4' 
 
 class WebStreamNode(Node):
     def __init__(self):
