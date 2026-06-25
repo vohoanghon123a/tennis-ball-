@@ -1,108 +1,88 @@
-#!/home/honvo/ros2_new/tennis_env/bin/python3
-# -*- coding: utf-8 -*-
+import sys
+# Ép Python quét thẳng vào thư mục site-packages của môi trường ảo để bốc thư viện chuẩn
+sys.path.insert(0, '/home/honvo/ros2_new/tennis_env/lib/python3.12/site-packages')
 
 import rclpy
 from rclpy.node import Node
+from sensor_msgs.msg import Image  # Hứng ảnh đã vẽ AI từ Gói 2
+from std_msgs.msg import String     # Hứng khoảng cách Z từ Gói 3
+from cv_bridge import CvBridge     # Cầu nối chuyển đổi ảnh
 import cv2
-import threading
-import sys
-import time
 import os
-from flask import Flask, Response, render_template_string
 
-# 1. Khởi tạo Flask Web Server
-app = Flask(__name__)
-
-# ⚠️ ĐƯỜNG DẪN FILE VIDEO: Bro hãy đổi tên/đường dẫn này thành file video đã xử lý của bro nhé!
-VIDEO_PATH = '/home/honvo/ros2_new/video_output.mp4' 
-
-class WebStreamNode(Node):
+class UiStorageNode(Node):
     def __init__(self):
-        super().__init__('web_node')
-        self.get_logger().info(f"Gói 5: Web Server đã chuyển sang chế độ phát lặp video: {VIDEO_PATH}")
-
-# 2. Hàm đọc video từ file và ÉP LẶP VÔ TẬN (Infinite Loop)
-def generate_mjpeg_stream():
-    # Kiểm tra xem file video có tồn tại thực tế không
-    if not os.path.exists(VIDEO_PATH):
-        print(f"❌ KHÔNG TÌM THẤY FILE VIDEO TẠI: {VIDEO_PATH}")
-        print("💡 Bro hãy kiểm tra lại đường dẫn hoặc tên file video của mình nhé!")
-        return
-
-    cap = cv2.VideoCapture(VIDEO_PATH)
-
-    while True:
-        if not cap.isOpened():
-            cap = cv2.VideoCapture(VIDEO_PATH)
-            time.sleep(1)
-            continue
-
-        ret, frame = cap.read()
+        super().__init__('ui_node')
+        self.bridge = CvBridge()
         
-        # 🟢 CHIẾN THUẬT LẶP VIDEO: Nếu hết video (ret == False), tua ngược về frame số 0 để chạy lại
-        if not ret:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            continue
+        # 🟢 ĐỒNG BỘ 1: Đăng ký nhận ảnh kết quả AI từ Gói 2
+        self.image_sub = self.create_subscription(
+            Image, 
+            '/tennis/processed_image', 
+            self.image_callback, 
+            10
+        )
+        
+        # 🟢 ĐỒNG BỘ 2: Đăng ký nhận kết quả tính khoảng cách từ Gói 3
+        self.spatial_sub = self.create_subscription(
+            String, 
+            '/tennis/spatial_data', 
+            self.spatial_callback, 
+            10
+        )
+        
+        self.latest_distance = "Đang tính..."
+        self.video_out_path = '/home/honvo/ros2_new/video_output.mp4'
+        self.video_writer = None
+        
+        self.get_logger().info(f"Gói 4: Bộ ghi video kiểm chứng NCKH đã kích hoạt! Đang chờ dữ liệu...")
 
-        # ĐỒNG BỘ TỐC ĐỘ: Đọc FPS gốc của video để phát đúng tốc độ, không bị quá nhanh
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        delay = 1.0 / fps if fps > 0 else 0.03
-        time.sleep(delay)
+    def spatial_callback(self, msg):
+        try:
+            # Tách chuỗi dữ liệu "Kích_Thước_Pixel,Khoảng_Cách_Z" lấy từ Gói 3
+            _, distance_z = msg.data.split(',')
+            self.latest_distance = f"{distance_z} mm"
+        except:
+            pass
 
-        # Nén ảnh thành JPG để bắn lên trình duyệt
-        ret_code, buffer = cv2.imencode('.jpg', frame)
-        if ret_code:
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+    def image_callback(self, msg):
+        try:
+            # Chuyển ảnh ROS 2 sang OpenCV để chuẩn bị ghi file
+            cv_frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
+            h, w = cv_frame.shape[:2]
+            
+            # 🟢 KHỞI TẠO BỘ GHI VIDEO: Chỉ chạy 1 lần duy nhất khi nhận được khung hình đầu tiên
+            if self.video_writer is None:
+                # Dùng mã hóa MP4V phổ biến, lưu tốc độ chuẩn 30 FPS theo kích thước ảnh thực tế
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                self.video_writer = cv2.VideoWriter(self.video_out_path, fourcc, 30.0, (w, h))
+                self.get_logger().info(f"🎥 Gói 4: Đang tiến hành ghi dữ liệu vào file: {self.video_out_path}")
+            
+            # 🟢 ÉP CHỮ KIỂM CHỨNG: Ghi số mét khoảng cách trực tiếp xuống góc dưới video
+            save_text = f"NCKH - Realtime Distance: {self.latest_distance}"
+            cv2.putText(cv_frame, save_text, (20, h - 20), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            
+            # Đút khung hình vào file MP4
+            self.video_writer.write(cv_frame)
+            
+        except Exception as e:
+            self.get_logger().error(f"Gói 4 lỗi ghi video: {str(e)}")
 
-    cap.release()
-
-# 3. Định tuyến giao diện Web hiển thị
-@app.route('/')
-def index():
-    html_code = """
-    <html>
-        <head>
-            <title>ROS 2 AI Tennis Video Playback</title>
-            <style>
-                body { background: #1e1e1e; color: white; text-align: center; font-family: Arial; padding-top: 20px; }
-                h1 { color: #4CAF50; }
-                .meta-info { color: #aaa; font-size: 14px; }
-            </style>
-        </head>
-        <body>
-            <h1>📡 Chế Độ Phát Lặp Video AI - ROS 2 Jazzy</h1>
-            <p class="meta-info">🎬 Đang phát lặp vô tận file video đã xử lý thành công!</p>
-            <hr style="width: 60%; border: 1px solid #444;">
-            <br>
-            <img src="{{ url_for('video_feed') }}" width="75%" style="border: 3px solid #4CAF50; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.6);">
-        </body>
-    </html>
-    """
-    return render_template_string(html_code)
-
-@app.route('/video_feed')
-def video_feed():
-    return Response(generate_mjpeg_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
-def run_flask_server():
-    app.run(host='0.0.0.0', port=5000, threaded=True, use_reloader=False)
+    def destroy_node(self):
+        # 🟢 QUAN TRỌNG: Khi bấm Ctrl+C tắt hệ thống, phải giải phóng VideoWriter để video không bị lỗi file (corrupt)
+        if self.video_writer is not None:
+            self.video_writer.release()
+            self.get_logger().info("Gói 4: Đã đóng và lưu file video cứng thành công! File sẵn sàng để báo cáo.")
+        super().destroy_node()
 
 def main(args=None):
-    # Thám tử in thông tin kiểm check luồng
-    print("\n" + "="*60)
-    print(f"🚨 [THÁM TỬ] Bộ thực thi Python đang phát video là: {sys.executable}")
-    print(f"🎬 [THÁM TỬ] Đang tải file video từ: {VIDEO_PATH}")
-    print("="*60 + "\n")
-
     rclpy.init(args=args)
-    node = WebStreamNode()
-    
-    # Chạy Flask Server ở luồng riêng
-    flask_thread = threading.Thread(target=run_flask_server, daemon=True)
-    flask_thread.start()
-    
-    rclpy.spin(node)
+    node = UiStorageNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
     node.destroy_node()
     rclpy.shutdown()
 

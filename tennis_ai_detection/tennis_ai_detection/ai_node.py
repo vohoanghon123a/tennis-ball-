@@ -13,22 +13,31 @@ import cv2
 class AiNode(Node):
     def __init__(self):
         super().__init__('ai_node')
+        # Nạp model weights từ desktop của bro
         self.model = YOLO('/home/honvo/Desktop/NCKH/data_test/best (1).pt')
         self.bridge = CvBridge()
         
-        # Đăng ký nhận ảnh từ Gói 1
-        self.subscription = self.create_subscription(Image, 'tennis_processed_image', self.image_callback, 10)
+        # 🟢 ĐỒNG BỘ 1: Hứng ảnh thô chuẩn từ Gói 1 truyền từ Jetson về
+        self.subscription = self.create_subscription(
+            Image, 
+            '/tennis/raw_image', 
+            self.image_callback, 
+            10
+        )
         
-        # Bộ phát 1: Phát tọa độ quả bóng tốt nhất sang Gói 3
-        self.publisher_ = self.create_publisher(String, 'tennis_pixels', 10)
+        # 🟢 ĐỒNG BỘ 2: Phát tọa độ quả bóng tốt nhất sang Gói 3 (Thêm dấu / cho chuẩn quy hoạch)
+        self.publisher_ = self.create_publisher(String, '/tennis/pixels', 10)
         
-        # Bộ phát 2: Phát ảnh ĐÃ VẼ ĐẦY ĐỦ TOẠ ĐỘ sang Gói 4 để lưu video kiểm chứng
-        self.ai_img_pub = self.create_publisher(Image, 'tennis_ai_image', 10)
+        # 🟢 ĐỒNG BỘ 3: Phát ảnh đã xử lý AI sang Gói 5 để Stream lên Web máy ảo
+        self.ai_img_pub = self.create_publisher(Image, '/tennis/processed_image', 10)
+        
         self.get_logger().info("Gói 2: Model YOLO đã nạp thành công -> Sẵn sàng detect và xuất tọa độ...")
 
     def image_callback(self, msg):
         cv_frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
-        results = self.model(cv_frame)
+        
+        # 🟢 TỐI ƯU: Thêm verbose=False để màn hình Terminal không bị tràn ngập log fps của YOLO
+        results = self.model(cv_frame, verbose=False)
         
         # Lấy ảnh nền đã có khung chữ nhật mặc định của YOLO trước
         annotated_frame = results[0].plot()
@@ -52,16 +61,16 @@ class AiNode(Node):
                 cv2.putText(annotated_frame, coord_text, (int(x1), int(y1) - 10), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)  # Chữ tọa độ trắng
                 
-                # Thuật toán lọc tìm quả bóng có độ tin cậy (conf) cao nhất
+                # Thuật toán lọc tìm quả bóng có độ tin cậy (conf) cao nhất (Giữ nguyên logic đỉnh cao của bro)
                 if conf > max_conf:
                     max_conf = conf
                     best_box = box
         
-        # 1. Phát ảnh đã chèn tọa độ đa mục tiêu sang Gói 4 lưu file
+        # 1. Phát ảnh đã chèn tọa độ đa mục tiêu sang Gói 5 để lên Web
         ai_msg = self.bridge.cv2_to_imgmsg(annotated_frame, encoding="bgr8")
         self.ai_img_pub.publish(ai_msg)
         
-        # 2. Chỉ gửi duy nhất tọa độ của quả bóng uy tín nhất sang Gói 3 để tính khoảng cách
+        # 2. Chỉ gửi duy nhất tọa độ của quả bóng uy tín nhất sang Gói 3 để tính khoảng cách 3D
         if best_box is not None:
             x1, y1, x2, y2 = best_box.xyxy[0].cpu().numpy()
             pixel_msg = String()
